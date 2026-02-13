@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>UWTP Water Quality Compliance Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Leaflet CSS/JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- SheetJS (XLSX loader) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <style>
+    :root{
+      --brand:#0d6efd;
+      --bg:#f6f8fb;
+      --card:#ffffff;
+      --text:#1f2a37;
+      --muted:#6b7280;
+      --border:#e5e7eb;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:var(--text); background:var(--bg); }
+    header{
+      background: linear-gradient(90deg, var(--brand), #084298);
+      color:#fff; padding:12px 16px;
+      display:flex; align-items:center; justify-content:space-between; gap:12px;
+      border-bottom: 1px solid rgba(255,255,255,.15);
+    }
+    header h1{ font-size:16px; margin:0; font-weight:700; letter-spacing:.2px; }
+    header .sub{ font-size:12px; opacity:.9; margin-top:2px; }
+    #container{ display:flex; height: calc(100vh - 58px); }
+    #sidebar{
+      width: 380px; max-width: 92vw;
+      padding: 12px;
+      border-right:1px solid var(--border);
+      overflow:auto;
+      background: #fff;
+    }
+    #map{ flex:1; }
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:12px;
+      margin-bottom:12px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.03);
+    }
+    .card h3{ margin:0 0 8px 0; font-size:13px; color:#111827; }
+    label{ font-size:12px; color:var(--muted); display:block; margin:10px 0 4px; }
+    select,input,button{
+      width:100%;
+      padding:9px 10px;
+      border:1px solid var(--border);
+      border-radius:10px;
+      font-size:13px;
+      background:#fff;
+    }
+    input::placeholder{ color:#9ca3af; }
+    button{
+      background:var(--brand);
+      color:#fff;
+      border:none;
+      cursor:pointer;
+      font-weight:600;
+    }
+    button.secondary{
+      background:#fff;
+      color:#111827;
+      border:1px solid var(--border);
+    }
+    button:active{ transform: translateY(1px); }
+    .row{ display:flex; gap:10px; }
+    .row > div{ flex:1; }
+    .kpis{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+    .kpi{
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:10px;
+      background:#fff;
+    }
+    .kpi .v{ font-size:16px; font-weight:800; }
+    .kpi .k{ font-size:11px; color:var(--muted); margin-top:2px; }
+    .hint{ font-size:12px; color:var(--muted); line-height:1.35; }
+    .tiny{ font-size:11px; color:var(--muted); }
+    .legend{
+      display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+      font-size:11px; color:var(--muted);
+    }
+    .dot{ width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; border:1px solid rgba(0,0,0,.15); }
+    table{ width:100%; border-collapse:collapse; font-size:12px; }
+    th,td{ padding:6px 6px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; }
+    th{ color:#111827; font-weight:700; font-size:11px; }
+    tr:hover td{ background:#f9fafb; }
+    a.link{ color:#fff; text-decoration:underline; }
+  </style>
+</head>
+
+<body>
+<header>
+  <div>
+    <h1>Urban Water Security & Resilient Infrastructure (AIWASI – MoHUA)</h1>
+    <div class="sub">NGT & CPCB compliance visualization • Upload CSV/Excel • Interactive map</div>
+  </div>
+  <div class="tiny" style="text-align:right; opacity:.95;">
+    Data source: ind_hydrowaste_mohua1.xlsx<br/>
+    <span style="opacity:.85;">Tip: keep Excel and this index.html in the same Azure folder (see “Default data path”).</span>
+  </div>
+</header>
+
+<div id="container">
+  <div id="sidebar">
+    <div class="card">
+      <h3>1) Load data</h3>
+      <label>Upload CSV/Excel</label>
+      <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" />
+      <label style="margin-top:12px;">Default data path (relative)</label>
+      <input id="defaultPath" value="./data/ind_hydrowaste_mohua1.csv" />
+      <div class="row" style="margin-top:10px;">
+        <div><button id="loadDefaultBtn" class="secondary">Load default file</button></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>2) Compliance Standard</h3>
+      <label>Choose Standard</label>
+      <select id="standardSelect">
+        <option value="NGT">NGT</option>
+        <option value="CPCB">CPCB</option>
+      </select>
+    </div>
+
+    <div class="card">
+      <h3>3) Filters</h3>
+      <label>State</label>
+      <select id="stateFilter"><option value="ALL">All States</option></select>
+      <label>Search (UWTP ID)</label>
+      <input id="idSearch" placeholder="e.g. TN-803339-023" />
+      <div class="row" style="margin-top:10px;">
+        <div><button id="applyBtn">Apply</button></div>
+        <div><button id="resetBtn" class="secondary">Reset</button></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>4) Plant List (filtered)</h3>
+      <div style="max-height:240px; overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>UWTP ID</th>
+              <th>State</th>
+              <th>BOD</th>
+              <th>COD</th>
+              <th>TSS</th>
+              <th>TP</th>
+              <th>TN</th>
+              <th>FC</th>
+            </tr>
+          </thead>
+          <tbody id="plantTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>3) Snapshot (filtered)</h3>
+      <div class="kpis">
+        <div class="kpi"><div class="v" id="kpiCount">0</div><div class="k">UWTPs shown</div></div>
+        <div class="kpi"><div class="v" id="kpiStates">0</div><div class="k">States covered</div></div>
+        <div class="kpi"><div class="v" id="kpiDesign">0</div><div class="k">Sum design capacity (MLD)</div></div>
+        <div class="kpi"><div class="v" id="kpiAvgScore">0</div><div class="k">Average total score</div></div>
+      </div>
+      <div class="hint" style="margin-top:10px;">
+        Use the score band + capacity filters to quickly identify <b>priority UWTPs</b> for upgrades or operational strengthening.
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>4) Priority list (bottom 10 by score)</h3>
+      <div class="tiny" style="margin-bottom:6px;">Shows the currently filtered set, sorted by TOTAL SCORE ascending.</div>
+      <div style="max-height:240px; overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>UWTP ID</th>
+              <th>State</th>
+              <th>Score</th>
+              <th>Design (MLD)</th>
+              <th>Oper. (MLD)</th>
+            </tr>
+          </thead>
+          <tbody id="bottomTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="tiny">
+        Note: This dashboard is for visualization and prioritization. Please validate site-level details before issuing final administrative directions.
+      </div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+</div>
+
+<script>
+  // Default file path (relative for Azure hosting)
+  let DEFAULT_DATA_URL = "./data/ind_hydrowaste_mohua1.csv";
+
+  // Map init
+  const map = L.map("map", { zoomControl: true }).setView([22, 79], 5);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "© OpenStreetMap contributors",
+    maxZoom: 19
+  }).addTo(map);
+
+  const layerGroup = L.layerGroup().addTo(map);
+
+  // Raw rows from data (normalized keys)
+  let allRows = [];
+  let filteredRows = [];
+  let currentStandard = "NGT";
+  // --- Compliance thresholds ---
+  const COMPLIANCE = {
+    NGT: { BOD: 10, COD: 50, TSS: 20, TP: null, TN: 10, FC: 230 },
+    CPCB: { BOD: 10, COD: 50, TSS: 20, TP: null, TN: 10, FC: 230 }
+  };
+
+  function checkCompliance(row, standard) {
+    const limits = COMPLIANCE[standard];
+    return {
+      BOD: Number(row["BOD"]) <= limits.BOD,
+      COD: Number(row["COD"]) <= limits.COD,
+      TSS: Number(row["TSS"]) <= limits.TSS,
+      TP: limits.TP === null ? true : Number(row["TP"]) <= limits.TP,
+      TN: Number(row["TN"]) <= limits.TN,
+      FC: Number(row["FC"]) <= limits.FC
+    };
+  }
+
+  // --- Helpers ---
+  function normKey(k){
+    return String(k || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function asNumber(v){
+    if (v === null || v === undefined || v === "") return NaN;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : NaN;
+  }
+
+  function parseLatLon(row){
+    // Prefer explicit columns
+    const lat = asNumber(row["Latitude"]);
+    const lon = asNumber(row["Longitude"]);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) return {lat, lon};
+
+    // Fallback: parse "Lat Long" like "13.0, 80.1"
+    const ll = row["Lat Long"];
+    if (!ll) return {lat: NaN, lon: NaN};
+    const m = String(ll).match(/(-?\d+(\.\d+)?)[,\s]+(-?\d+(\.\d+)?)/);
+    if (!m) return {lat: NaN, lon: NaN};
+    return {lat: Number(m[1]), lon: Number(m[3])};
+  }
+
+  function scoreBand(score){
+    if (!Number.isFinite(score)) return "NA";
+    if (score >= 50) return "50_60";
+    if (score >= 40) return "40_49";
+    if (score >= 30) return "30_39";
+    return "0_29";
+  }
+
+  function scoreColor(score){
+    // fixed palette for clarity (good for official presentations)
+    if (!Number.isFinite(score)) return "#6b7280"; // grey
+    if (score >= 50) return "#2e7d32"; // green
+    if (score >= 40) return "#f9a825"; // yellow
+    if (score >= 30) return "#fb8c00"; // orange
+    return "#c62828"; // red
+  }
+
+  function formatNum(x, digits=1){
+    if (!Number.isFinite(x)) return "—";
+    return x.toFixed(digits);
+  }
+
+  function clearMap(){
+    layerGroup.clearLayers();
+  }
+
+  function updateStateDropdown(){
+    const sel = document.getElementById("stateFilter");
+    // Reset to default option
+    sel.innerHTML = '<option value="ALL">All States</option>';
+    const states = [...new Set(allRows.map(r => (r["State"] || r["State "] || "").toString().trim()).filter(Boolean))].sort();
+    states.forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = s;
+      opt.textContent = s;
+      sel.appendChild(opt);
+    });
+  }
+
+  function resetFilters(){
+    document.getElementById("stateFilter").value = "ALL";
+    document.getElementById("scoreBand").value = "ALL";
+    document.getElementById("minDesign").value = "";
+    document.getElementById("minOper").value = "";
+    document.getElementById("idSearch").value = "";
+    applyFilters();
+  }
+
+  function applyFilters(){
+    clearMap();
+    const state = document.getElementById("stateFilter").value;
+    const q = document.getElementById("idSearch").value.trim().toLowerCase();
+    filteredRows = allRows.filter(r => {
+      const st = (r["State"] || r["State "] || "").toString().trim();
+      if (state !== "ALL" && st !== state) return false;
+      const id = (r["UWTP ID"] || "").toString().toLowerCase();
+      if (q && !id.includes(q)) return false;
+      const {lat, lon} = parseLatLon(r);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+      return true;
+    });
+    // Plot markers
+    let bounds = null;
+    filteredRows.forEach(r => {
+      const {lat, lon} = parseLatLon(r);
+      const id = (r["UWTP ID"] || "—").toString();
+      const st = (r["State"] || r["State "] || "—").toString().trim();
+      const compliance = checkCompliance(r, currentStandard);
+      // Color: red if any parameter is not compliant, green if all compliant
+      const markerColor = Object.values(compliance).every(Boolean) ? "#2e7d32" : "#c62828";
+      const marker = L.circleMarker([lat, lon], {
+        radius: 8,
+        color: markerColor,
+        weight: 2,
+        fillColor: markerColor,
+        fillOpacity: 0.7
+      }).bindPopup(`<b>${id}</b><br>State: ${st}<br>BOD: <span style='color:${compliance.BOD ? "#2e7d32" : "#c62828"}'>${r["BOD"]}</span><br>COD: <span style='color:${compliance.COD ? "#2e7d32" : "#c62828"}'>${r["COD"]}</span><br>TSS: <span style='color:${compliance.TSS ? "#2e7d32" : "#c62828"}'>${r["TSS"]}</span><br>TP: <span style='color:${compliance.TP ? "#2e7d32" : "#c62828"}'>${r["TP"]}</span><br>TN: <span style='color:${compliance.TN ? "#2e7d32" : "#c62828"}'>${r["TN"]}</span><br>FC: <span style='color:${compliance.FC ? "#2e7d32" : "#c62828"}'>${r["FC"]}</span>`);
+      marker.addTo(layerGroup);
+      const b = L.latLngBounds([lat, lon], [lat, lon]);
+      bounds = bounds ? bounds.extend(b) : b;
+    });
+    if (bounds) map.fitBounds(bounds.pad(0.2));
+    updatePlantTable();
+  }
+
+  function bandLabel(score){
+    if (!Number.isFinite(score)) return "NA";
+    if (score >= 50) return "High";
+    if (score >= 40) return "Moderate";
+    if (score >= 30) return "Low";
+    return "Very Low";
+  }
+
+  function safeInt(v){
+    const n = Number(v);
+    return Number.isFinite(n) ? String(Math.round(n)) : "—";
+  }
+
+  function paramRow(name, p1, p2, p3){
+    const c = (x) => {
+      const n = Number(x);
+      return Number.isFinite(n) ? n.toFixed(2) : "—";
+    };
+    return `<tr>
+      <td style="padding:3px 0; border-bottom:1px solid #f3f4f6;">${name}</td>
+      <td style="padding:3px 0; border-bottom:1px solid #f3f4f6; text-align:right;">${c(p1)}</td>
+      <td style="padding:3px 0; border-bottom:1px solid #f3f4f6; text-align:right;">${c(p2)}</td>
+      <td style="padding:3px 0; border-bottom:1px solid #f3f4f6; text-align:right;">${c(p3)}</td>
+    </tr>`;
+  }
+
+  function updateKPIs(){
+    const count = filteredRows.length;
+
+    const states = new Set(filteredRows.map(r => (r["State"] || r["State "] || "").toString().trim()).filter(Boolean));
+    let sumDesign = 0;
+    let sumScore = 0;
+    let scoreN = 0;
+
+    filteredRows.forEach(r => {
+      const dcap = asNumber(r["Design capacity (MLD)"]);
+      if (Number.isFinite(dcap)) sumDesign += dcap;
+
+      const score = asNumber(r["TOTAL SCORE  (MAX. 60)"] ?? r["TOTAL SCORE (MAX. 60)"] ?? r["TOTAL SCORE"]);
+      if (Number.isFinite(score)) { sumScore += score; scoreN += 1; }
+    });
+
+    document.getElementById("kpiCount").textContent = count.toLocaleString();
+    document.getElementById("kpiStates").textContent = states.size.toLocaleString();
+    document.getElementById("kpiDesign").textContent = (Math.round(sumDesign * 10) / 10).toLocaleString();
+    document.getElementById("kpiAvgScore").textContent = scoreN ? (Math.round((sumScore/scoreN) * 10) / 10).toLocaleString() : "—";
+  }
+
+  function updateBottomTable(){
+    const tbody = document.getElementById("bottomTable");
+    tbody.innerHTML = "";
+
+    const rows = [...filteredRows].sort((a,b) => {
+      const sa = asNumber(a["TOTAL SCORE  (MAX. 60)"] ?? a["TOTAL SCORE (MAX. 60)"] ?? a["TOTAL SCORE"]);
+      const sb = asNumber(b["TOTAL SCORE  (MAX. 60)"] ?? b["TOTAL SCORE (MAX. 60)"] ?? b["TOTAL SCORE"]);
+      return (Number.isFinite(sa) ? sa : 999) - (Number.isFinite(sb) ? sb : 999);
+    }).slice(0, 10);
+
+    rows.forEach(r => {
+      const id = (r["UWTP ID"] || "—").toString();
+      const st = (r["State"] || r["State "] || "—").toString().trim();
+      const score = asNumber(r["TOTAL SCORE  (MAX. 60)"] ?? r["TOTAL SCORE (MAX. 60)"] ?? r["TOTAL SCORE"]);
+      const dcap = asNumber(r["Design capacity (MLD)"]);
+      const ocap = asNumber(r["Operational capacity (MLD)"]);
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(id)}</td>
+        <td>${escapeHtml(st)}</td>
+        <td>${Number.isFinite(score) ? score : "—"}</td>
+        <td>${formatNum(dcap,2)}</td>
+        <td>${formatNum(ocap,2)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function escapeHtml(str){
+    return String(str)
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  // --- Excel loading ---
+  function sheetToRows(workbook){
+    // Use first sheet
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const raw = XLSX.utils.sheet_to_json(sheet, { defval: null });
+
+    // Normalize keys and trim strings
+    const rows = raw.map(obj => {
+      const out = {};
+      Object.keys(obj).forEach(k => {
+        const nk = normKey(k);
+        let v = obj[k];
+        if (typeof v === "string") v = v.trim();
+        out[nk] = v;
+      });
+      return out;
+    });
+
+    return rows;
+  }
+
+  async function loadDefault(){
+    const p = document.getElementById("defaultPath").value.trim();
+    DEFAULT_XLSX_URL = p || DEFAULT_XLSX_URL;
+
+    try{
+      const res = await fetch(DEFAULT_XLSX_URL, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status} while fetching ${DEFAULT_XLSX_URL}`);
+      const buf = await res.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      allRows = sheetToRows(wb);
+      postLoad();
+    }catch(err){
+      console.error(err);
+      alert("Failed to load default Excel. Ensure the file exists at the given path and is accessible from your Azure site.");
+    }
+  }
+
+  function loadFromFile(file){
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try{
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type: "array" });
+        allRows = sheetToRows(wb);
+        postLoad();
+      }catch(err){
+        console.error(err);
+        alert("Could not read the Excel file. Please upload a valid .xlsx file.");
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function postLoad(){
+    updateStateDropdown();
+    resetFilters();
+  }
+
+  // Export filtered rows to CSV (download)
+  function exportFiltered(){
+    if (!filteredRows.length){
+      alert("No rows to export (current filters returned 0 results).");
+      return;
+    }
+    const ws = XLSX.utils.json_to_sheet(filteredRows);
+    const csv = XLSX.utils.sheet_to_csv(ws);
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "ind_hydrowaste_filtered.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Event wiring
+  document.getElementById("applyBtn").addEventListener("click", applyFilters);
+  document.getElementById("resetBtn").addEventListener("click", resetFilters);
+  document.getElementById("loadDefaultBtn").addEventListener("click", loadDefault);
+  document.getElementById("standardSelect").addEventListener("change", function(){
+    currentStandard = this.value;
+    applyFilters();
+  });
+  document.getElementById("fileInput").addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) loadFromFile(f);
+  });
+  // Table update for compliance
+  function updatePlantTable(){
+    const tbody = document.getElementById("plantTable");
+    tbody.innerHTML = "";
+    filteredRows.forEach(r => {
+      const compliance = checkCompliance(r, currentStandard);
+      const td = (val, ok) => `<td style='color:${ok ? "#2e7d32" : "#c62828"};font-weight:${ok?600:700}'>${val ?? "—"}</td>`;
+      tbody.innerHTML += `<tr><td>${r["UWTP ID"]}</td><td>${r["State"]}</td>${td(r["BOD"],compliance.BOD)}${td(r["COD"],compliance.COD)}${td(r["TSS"],compliance.TSS)}${td(r["TP"],compliance.TP)}${td(r["TN"],compliance.TN)}${td(r["FC"],compliance.FC)}</tr>`;
+    });
+  }
+  // Auto-load default on startup
+  loadDefault();
+</script>
+</body>
+</html>
